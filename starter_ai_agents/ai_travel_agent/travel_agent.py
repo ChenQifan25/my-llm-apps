@@ -75,11 +75,56 @@ if 'itinerary' not in st.session_state:
 deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY")
 serp_api_key = os.environ.get("SERP_API_KEY")
 
-# 输入框无条件渲染：即使 Key 没配好，目的地 / 天数 也一定看得到
+# 输入框无条件渲染：即使 Key 没配好，目的地 / 天数 / 预算 / 偏好 也一定看得到
 destination = st.text_input("Where do you want to go?")
 num_days = st.number_input(
     "How many days do you want to travel for?", min_value=1, max_value=30, value=7
 )
+
+# 预算：金额 + 币种，会作为成本上限传给 Planner
+budget_col, currency_col = st.columns(2)
+with budget_col:
+    budget = st.number_input(
+        "What's your total budget for this trip?",
+        min_value=0,
+        max_value=1000000,
+        value=5000,
+        step=500,
+    )
+with currency_col:
+    currency = st.selectbox(
+        "Currency", ["CNY", "USD", "EUR", "GBP", "JPY"], index=0
+    )
+
+# 兴趣偏好：常用标签多选 + 自由文本补充，一起传给 Planner
+INTEREST_OPTIONS = [
+    "Food & Dining",
+    "Culture & History",
+    "Nature & Outdoors",
+    "Museums & Art",
+    "Shopping",
+    "Nightlife",
+    "Adventure & Sports",
+    "Relaxation & Spa",
+    "Photography",
+    "Family-friendly",
+]
+interests = st.multiselect(
+    "What are your interests and preferences?",
+    INTEREST_OPTIONS,
+    default=["Food & Dining", "Culture & History"],
+)
+extra_preferences = st.text_input(
+    "Anything else we should know? (optional, e.g. vegetarian, no early mornings, wheelchair access)"
+)
+
+# 把预算和兴趣整理成 Planner 易读的文本
+budget_text = (
+    f"{int(budget)} {currency}" if budget > 0 else "No specific budget limit"
+)
+interests_text = ", ".join(interests) if interests else "No specific preference"
+if extra_preferences.strip():
+    interests_text = f"{interests_text}; {extra_preferences.strip()}"
 
 missing_keys = [
     name
@@ -129,17 +174,20 @@ if generate_clicked:
     )
     planner = Agent(
         name="Planner",
-        role="Generates a draft itinerary based on user preferences and research results",
+        role="Generates a draft itinerary based on user preferences, budget, and research results",
         # model=OpenAIChat(id="gpt-4o", api_key=openai_api_key),
         model=DeepSeek(id="deepseek-chat", api_key=deepseek_api_key),
         description=dedent(
             """\
-        You are a senior travel planner. Given a travel destination, the number of days the user wants to travel for, and a list of research results,
+        You are a senior travel planner. Given a travel destination, the number of days the user wants to travel for, a total budget,
+        the traveller's interests and preferences, and a list of research results,
         your goal is to generate a draft itinerary that meets the user's needs and preferences.
         """
         ),
         instructions=[
-            "Given a travel destination, the number of days the user wants to travel for, and a list of research results, generate a draft itinerary that includes suggested activities and accommodations.",
+            "Given a travel destination, the number of days the user wants to travel for, a total budget, the traveller's interests and preferences, and a list of research results, generate a draft itinerary that includes suggested activities and accommodations.",
+            "Never exceed the stated total budget: estimate the cost of transport, accommodation, food and activities, show a day-by-day cost breakdown plus the estimated total, and keep that total within the budget.",
+            "Prioritise activities and accommodations that match the traveller's stated interests and preferences, and briefly explain how each day reflects them.",
             "Ensure the itinerary is well-structured, informative, and engaging.",
             "Ensure you provide a nuanced and balanced itinerary, quoting facts where possible.",
             "Remember: the quality of the itinerary is important.",
@@ -160,12 +208,26 @@ if generate_clicked:
             st.stop()
 
     with st.spinner("Creating your personalized itinerary..."):
+        # 预算 > 0 时才强制成本约束，否则只按兴趣偏好定制
+        if budget > 0:
+            closing_instruction = (
+                "Please create a detailed itinerary based on this research. "
+                "Keep the total estimated cost within the stated budget and tailor "
+                "the activities and accommodations to the traveller's interests and preferences."
+            )
+        else:
+            closing_instruction = (
+                "Please create a detailed itinerary based on this research. "
+                "Tailor the activities and accommodations to the traveller's interests and preferences."
+            )
         prompt = f"""
         Destination: {destination}
         Duration: {num_days} days
+        Budget: {budget_text}
+        Interests & Preferences: {interests_text}
         Research Results: {research_results.content}
 
-        Please create a detailed itinerary based on this research.
+        {closing_instruction}
         """
         try:
             response: RunOutput = planner.run(prompt, stream=False)
