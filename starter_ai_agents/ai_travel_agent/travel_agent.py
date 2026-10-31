@@ -5,6 +5,8 @@ from agno.tools.serpapi import SerpApiTools
 from agno.models.deepseek import DeepSeek
 import streamlit as st
 import re
+# 地图距离工具（地理编码 + 路网距离）拆分在同目录的 map_tools.py，本文件只负责 UI 与 Agent 编排
+from map_tools import estimate_travel_distance
 from agno.models.openai import OpenAIChat
 from icalendar import Calendar, Event
 from datetime import datetime, timedelta
@@ -205,12 +207,17 @@ if generate_clicked:
             "Given a travel destination, the number of days the user wants to travel for, a total budget, the traveller's interests and preferences, and a list of research results, generate a draft itinerary that includes suggested activities and accommodations.",
             "Never exceed the stated total budget: estimate the cost of transport, accommodation, food and activities, show a day-by-day cost breakdown plus the estimated total, and keep that total within the budget.",
             "Prioritise activities and accommodations that match the traveller's stated interests and preferences, and briefly explain how each day reflects them.",
+            "Before you decide which attractions go on the same day, call `estimate_travel_distance` for each pair of neighbouring stops (pass the city name as `near` to disambiguate) and use the returned distance and travel time to group nearby places together; never make a day zig-zag back and forth across the city.",
+            "Treat a one-way leg longer than about 60 minutes as a signal to move that stop to another day or replace it with something closer, and say so briefly when you keep it anyway.",
+            "If a tool answers NOT_FOUND or ERROR, use a more complete place name (for example add the city or country) once; if it still fails, continue planning without that data and keep the day's route geographically sensible.",
             "Ensure the itinerary is well-structured, informative, and engaging.",
             "Ensure you provide a nuanced and balanced itinerary, quoting facts where possible.",
             "Remember: the quality of the itinerary is important.",
             "Focus on clarity, coherence, and overall quality.",
             "Never make up facts or plagiarize. Always provide proper attribution.",
         ],
+        # 挂载地图距离工具：Agno 会把函数名、docstring 和类型注解转成工具描述与参数 schema
+        tools=[estimate_travel_distance],
         add_datetime_to_context=True,
     )
 
