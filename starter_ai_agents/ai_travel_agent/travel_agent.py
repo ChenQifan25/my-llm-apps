@@ -59,6 +59,23 @@ def generate_ics_content(plan_text:str, start_date: datetime = None) -> bytes:
 
     return cal.to_ical()
 
+
+# ---------------------------------------------------------------
+# Researcher 结果缓存：同一个 (目的地, 天数) 在 TTL 内只真正调一次搜索 API
+#   1) st.cache_data 是 Streamlit 内置的，不需要任何外部依赖
+#   2) 缓存 key 只由 destination 和 num_days 决定：参数名以 "_" 开头（_researcher）
+#      时 Streamlit 不会把它算进缓存 key，所以 Agent 每次 rerun 重建也不会让缓存失效
+#   3) ttl=24*60*60 秒 = 24 小时；show_spinner=False 是为了复用页面已有的 spinner，避免双圈
+#   4) 函数体内只有 researcher.run，不含任何 st. 开头的 UI 代码（返回值是 str，可安全缓存）
+# ---------------------------------------------------------------
+@st.cache_data(ttl=24 * 60 * 60, show_spinner=False)
+def cached_research(_researcher, destination: str, num_days: int) -> str:
+    """执行 Researcher 调研，返回正文文本；相同 destination + num_days 命中 24 小时缓存。"""
+    research_results: RunOutput = _researcher.run(
+        f"Research {destination} for a {num_days} day trip", stream=False
+    )
+    return research_results.content
+
 # Set up the Streamlit app
 st.title("AI Travel Planner for chen")
 st.caption("Plan your next adventure with AI Travel Planner by researching and planning a personalized itinerary on autopilot using GPT-4o")
@@ -199,8 +216,11 @@ if generate_clicked:
 
     with st.spinner("Researching your destination..."):
         try:
-            research_results: RunOutput = researcher.run(
-                f"Research {destination} for a {num_days} day trip", stream=False
+            # 替换原来的 researcher.run(...)：改调缓存函数
+            # 相同 (destination, num_days) 在 24 小时内直接返回缓存，不再请求 API
+            # destination.strip() + int(num_days) 让缓存 key 更稳定（忽略首尾空格、避免 int/float 差异）
+            research_content = cached_research(
+                researcher, destination.strip(), int(num_days)
             )
             st.write("Research completed")
         except Exception as e:
@@ -225,7 +245,7 @@ if generate_clicked:
         Duration: {num_days} days
         Budget: {budget_text}
         Interests & Preferences: {interests_text}
-        Research Results: {research_results.content}
+        Research Results: {research_content}
 
         {closing_instruction}
         """
